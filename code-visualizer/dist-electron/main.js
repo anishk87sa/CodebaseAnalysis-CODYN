@@ -1,4 +1,7 @@
 "use strict";
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 const electron = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
@@ -130,6 +133,7 @@ function shouldIgnoreFile(fileName, extension) {
 const MAX_SOURCE_FILE_SIZE = 5 * 1024 * 1024;
 class SourceScanner {
   constructor(rootPath) {
+    __publicField(this, "rootPath");
     this.rootPath = rootPath;
   }
   /**
@@ -281,6 +285,13 @@ async function parseFile(absolutePath, relativePath) {
     parser.setLanguage(language);
     const sourceCode = await fs.readFile(absolutePath, "utf8");
     const tree = parser.parse(sourceCode);
+    if (!tree) {
+      return {
+        status: "parse_error",
+        file: { path: absolutePath, relativePath, language: langDef.id },
+        errors: [{ message: "Parser returned null tree" }]
+      };
+    }
     const hasError = tree.rootNode.hasError;
     const cst = serializeCST(tree.rootNode);
     tree.delete();
@@ -406,8 +417,10 @@ async function saveGlobalGraphData(repositoryRoot, globalGraph) {
 }
 class ProjectSymbolTable {
   constructor() {
-    this.symbolsByFile = /* @__PURE__ */ new Map();
-    this.importsByFile = /* @__PURE__ */ new Map();
+    // file path -> local symbols
+    __publicField(this, "symbolsByFile", /* @__PURE__ */ new Map());
+    // file path -> imported symbols
+    __publicField(this, "importsByFile", /* @__PURE__ */ new Map());
   }
   addSymbol(file, symbol) {
     if (!this.symbolsByFile.has(file)) {

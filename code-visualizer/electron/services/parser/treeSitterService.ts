@@ -93,6 +93,13 @@ export async function parseFile(absolutePath: string, relativePath: string): Pro
 
         const sourceCode = await fs.readFile(absolutePath, 'utf8');
         const tree = parser.parse(sourceCode);
+        if (!tree) {
+            return {
+                status: "parse_error",
+                file: { path: absolutePath, relativePath, language: langDef.id },
+                errors: [{ message: 'Parser returned null tree' }]
+            };
+        }
         
         const hasError = tree.rootNode.hasError;
         const cst = serializeCST(tree.rootNode);
