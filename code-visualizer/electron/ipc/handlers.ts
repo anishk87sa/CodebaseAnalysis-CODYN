@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, dialog } from 'electron'
 import { getDirectoryTree } from '../services/repositoryService'
 import { analyzeRepository } from '../services/storage/cstStorage'
 import { generateGraph } from '../services/graph/graphExtractor'
+import { getFileGraphData, getGlobalGraphData } from '../services/graph/graphReader'
 
 export function registerIpcHandlers(win: BrowserWindow) {
   ipcMain.handle('repository:selectFolder', async () => {
@@ -40,6 +41,26 @@ export function registerIpcHandlers(win: BrowserWindow) {
     try {
       const result = await generateGraph(dirPath)
       return result
+    } catch (err) {
+      console.error(err)
+      return null
+    }
+  })
+
+  ipcMain.handle('graph:getFile', async (_, repoRoot: string, filePath: string) => {
+    try {
+      const data = await getFileGraphData(repoRoot, filePath)
+      return data
+    } catch (err) {
+      console.error(err)
+      return null
+    }
+  })
+
+  ipcMain.handle('graph:getGlobal', async (_, repoRoot: string) => {
+    try {
+      const data = await getGlobalGraphData(repoRoot)
+      return data
     } catch (err) {
       console.error(err)
       return null

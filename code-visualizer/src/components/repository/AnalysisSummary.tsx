@@ -4,10 +4,11 @@ import React, { useState } from 'react';
 interface AnalysisSummaryProps {
   result: any;
   isAnalyzing: boolean;
+  onClose?: () => void;
 }
 
 
-export default function AnalysisSummary({ result, isAnalyzing }: AnalysisSummaryProps) {
+export default function AnalysisSummary({ result, isAnalyzing, onClose }: AnalysisSummaryProps) {
   const [isGeneratingGraph, setIsGeneratingGraph] = useState(false);
   const [graphResult, setGraphResult] = useState<any | null>(null);
 
@@ -26,7 +27,7 @@ export default function AnalysisSummary({ result, isAnalyzing }: AnalysisSummary
 
   if (isAnalyzing) {
     return (
-      <div className="analysis-summary analyzing">
+      <div className="analysis-summary analyzing" style={{ position: 'relative' }}>
         <div className="spinner"></div>
         <p>Analyzing repository...</p>
       </div>
@@ -36,7 +37,15 @@ export default function AnalysisSummary({ result, isAnalyzing }: AnalysisSummary
   if (!result) return null;
 
   return (
-    <div className="analysis-summary completed">
+    <div className="analysis-summary completed" style={{ position: 'relative' }}>
+      {onClose && (
+        <button 
+          onClick={onClose} 
+          style={{ position: 'absolute', top: '10px', right: '10px', background: 'transparent', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '18px' }}
+        >
+          ✕
+        </button>
+      )}
       <h3>Analysis Complete</h3>
       
       <div className="stats-grid">
@@ -71,7 +80,7 @@ export default function AnalysisSummary({ result, isAnalyzing }: AnalysisSummary
         <p>Output: {result.cstDirectory}</p>
       </div>
 
-      <div className="graph-generation-section" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #eee' }}>
+      <div className="graph-generation-section" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #eee', display: 'none' }}>
         <button 
           onClick={handleGenerateGraph} 
           disabled={isGeneratingGraph}

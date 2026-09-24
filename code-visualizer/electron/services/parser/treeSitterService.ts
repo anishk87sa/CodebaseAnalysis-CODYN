@@ -21,17 +21,16 @@ function getTreeSitter(): TreeSitterModule {
 }
 
 // Resolve the WASM grammar directory relative to the project root.
-// In dev+Electron: __dirname = dist-electron/ → go up 2 levels to project root
+// In dev+Electron: __dirname = dist-electron/ → go up 1 level to project root
 // In Vitest: __dirname = electron/services/parser/ → go up 3 levels to project root
-// We detect which case we're in by checking if node_modules is 2 or 3 levels up.
 function resolveWasmDir(): string {
-    const from2Up = path.resolve(__dirname, '../../node_modules/tree-sitter-wasms/out');
-    const from3Up = path.resolve(__dirname, '../../../node_modules/tree-sitter-wasms/out');
+    const fromElectron = path.resolve(__dirname, '../node_modules/tree-sitter-wasms/out');
+    const fromVitest = path.resolve(__dirname, '../../../node_modules/tree-sitter-wasms/out');
     try {
-        require('fs').accessSync(from2Up);
-        return from2Up;
+        require('fs').accessSync(fromElectron);
+        return fromElectron;
     } catch {
-        return from3Up;
+        return fromVitest;
     }
 }
 const WASM_DIR = resolveWasmDir();

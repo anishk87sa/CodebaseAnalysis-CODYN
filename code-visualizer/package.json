@@ -10,6 +10,8 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@types/dagre": "^0.7.54",
+    "dagre": "^0.8.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "reactflow": "^11.10.1",

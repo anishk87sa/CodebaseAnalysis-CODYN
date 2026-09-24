@@ -8,5 +8,7 @@ contextBridge.exposeInMainWorld('codyn', {
   },
   graph: {
     generate: (path: string) => ipcRenderer.invoke('graph:generate', path),
+    getFile: (repoRoot: string, filePath: string) => ipcRenderer.invoke('graph:getFile', repoRoot, filePath),
+    getGlobal: (repoRoot: string) => ipcRenderer.invoke('graph:getGlobal', repoRoot),
   }
 })

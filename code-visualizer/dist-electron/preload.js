@@ -7,6 +7,8 @@ electron.contextBridge.exposeInMainWorld("codyn", {
     analyzeCST: (path) => electron.ipcRenderer.invoke("repository:analyzeCST", path)
   },
   graph: {
-    generate: (path) => electron.ipcRenderer.invoke("graph:generate", path)
+    generate: (path) => electron.ipcRenderer.invoke("graph:generate", path),
+    getFile: (repoRoot, filePath) => electron.ipcRenderer.invoke("graph:getFile", repoRoot, filePath),
+    getGlobal: (repoRoot) => electron.ipcRenderer.invoke("graph:getGlobal", repoRoot)
   }
 });

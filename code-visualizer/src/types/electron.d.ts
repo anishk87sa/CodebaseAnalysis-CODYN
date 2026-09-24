@@ -8,6 +8,8 @@ export interface IElectronAPI {
   },
   graph: {
     generate: (path: string) => Promise<any>;
+    getFile: (repoRoot: string, filePath: string) => Promise<any>;
+    getGlobal: (repoRoot: string) => Promise<any>;
   }
 }
 

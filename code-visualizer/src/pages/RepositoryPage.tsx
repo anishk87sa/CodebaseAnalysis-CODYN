@@ -4,14 +4,37 @@ import LoadRepositoryButton from '../components/repository/LoadRepositoryButton'
 import FileTree from '../components/repository/FileTree';
 import FileDetails from '../components/repository/FileDetails';
 import AnalysisSummary from '../components/repository/AnalysisSummary';
+import GlobalGraphView from '../components/graph/GlobalGraphView';
 
 export default function RepositoryPage() {
   const [fileTree, setFileTree] = useState<FileNode | null>(null);
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
+  const [showGlobalGraph, setShowGlobalGraph] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any | null>(null);
+  const [showAnalysisSummary, setShowAnalysisSummary] = useState(true);
+
+  const handleAnalyze = async (path: string = fileTree?.path || '') => {
+    if (!path) return;
+    
+    setIsAnalyzing(true);
+    setShowAnalysisSummary(true);
+    setAnalysisResult(null);
+    try {
+      const result = await window.codyn.repository.analyzeCST(path);
+      // Wait for graph extraction to finish as well
+      await window.codyn.graph.generate(path);
+      
+      setAnalysisResult(result);
+    } catch (err) {
+      console.error(err);
+      setError('An error occurred during analysis or graph generation.');
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   const handleLoadRepository = async () => {
     setError(null);
@@ -29,7 +52,10 @@ export default function RepositoryPage() {
       } else {
         setFileTree(tree);
         setSelectedFile(null); // Reset selection
+        setShowGlobalGraph(false);
         setAnalysisResult(null);
+        // Automatically analyze
+        handleAnalyze(tree.path);
       }
     } catch (err) {
       console.error(err);
@@ -41,36 +67,28 @@ export default function RepositoryPage() {
 
   const handleFileSelect = (node: FileNode) => {
     setSelectedFile(node);
+    setShowGlobalGraph(false);
   };
 
-  const handleAnalyze = async () => {
-    if (!fileTree?.path) return;
-    
-    setIsAnalyzing(true);
-    setAnalysisResult(null);
-    try {
-      const result = await window.codyn.repository.analyzeCST(fileTree.path);
-      setAnalysisResult(result);
-    } catch (err) {
-      console.error(err);
-      setError('An error occurred during analysis.');
-    } finally {
-      setIsAnalyzing(false);
-    }
+  const handleGlobalGraphSelect = () => {
+    setSelectedFile(null);
+    setShowGlobalGraph(true);
   };
 
   return (
     <div className="repository-page">
-      <header className="repo-header">
-        <div className="header-brand">CODYN</div>
-        <div className="header-title">
-          {fileTree ? fileTree.name : 'Repository'}
+      <header className="repo-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+          <div className="header-brand">CODYN</div>
+          <div className="header-title">
+            {fileTree ? fileTree.name : 'Repository'}
+          </div>
         </div>
         {fileTree && (
           <div className="header-actions">
             <button 
               className="action-button primary" 
-              onClick={handleAnalyze}
+              onClick={() => handleAnalyze()}
               disabled={isAnalyzing}
             >
               {isAnalyzing ? 'Analyzing...' : 'Analyze Repository'}
@@ -110,6 +128,26 @@ export default function RepositoryPage() {
                 </svg>
               </button>
             </div>
+            
+            <div className="sidebar-actions" style={{ padding: '0.5rem' }}>
+              <button 
+                onClick={handleGlobalGraphSelect}
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  backgroundColor: showGlobalGraph ? '#3b82f6' : 'transparent',
+                  color: showGlobalGraph ? 'white' : '#cbd5e1',
+                  border: showGlobalGraph ? 'none' : '1px solid #334155',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  fontWeight: showGlobalGraph ? 'bold' : 'normal'
+                }}
+              >
+                🌍 View Global Call Graph
+              </button>
+            </div>
+
             <div className="sidebar-content">
               <FileTree 
                 node={fileTree} 
@@ -120,15 +158,21 @@ export default function RepositoryPage() {
           </aside>
           
           <main className="main-content">
-            {(isAnalyzing || analysisResult) && (
-              <AnalysisSummary result={analysisResult} isAnalyzing={isAnalyzing} />
+            {showAnalysisSummary && (isAnalyzing || analysisResult) && (
+              <AnalysisSummary 
+                result={analysisResult} 
+                isAnalyzing={isAnalyzing} 
+                onClose={() => setShowAnalysisSummary(false)} 
+              />
             )}
             
-            {selectedFile ? (
-              <FileDetails node={selectedFile} />
+            {showGlobalGraph ? (
+              <GlobalGraphView repoRoot={fileTree.path} />
+            ) : selectedFile ? (
+              <FileDetails node={selectedFile} repoRoot={fileTree.path} />
             ) : (
               <div className="details-empty">
-                <p>Select a file to inspect</p>
+                <p>Select a file to inspect, or view the Global Graph</p>
               </div>
             )}
           </main>

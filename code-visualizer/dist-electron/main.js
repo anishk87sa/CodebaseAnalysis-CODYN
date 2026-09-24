@@ -16,7 +16,7 @@ async function getDirectoryTree(dirPath) {
       const files = await fs.readdir(dirPath);
       const childNodes = [];
       for (const file of files) {
-        if (file === "node_modules" || file === ".git" || file === "dist" || file === ".DS_Store") {
+        if (file === "node_modules" || file === ".git" || file === "dist" || file === ".DS_Store" || file === ".codyn") {
           continue;
         }
         const fullPath = path.join(dirPath, file);
@@ -223,13 +223,13 @@ function getTreeSitter() {
   return _treeSitterModule;
 }
 function resolveWasmDir() {
-  const from2Up = path.resolve(__dirname, "../../node_modules/tree-sitter-wasms/out");
-  const from3Up = path.resolve(__dirname, "../../../node_modules/tree-sitter-wasms/out");
+  const fromElectron = path.resolve(__dirname, "../node_modules/tree-sitter-wasms/out");
+  const fromVitest = path.resolve(__dirname, "../../../node_modules/tree-sitter-wasms/out");
   try {
-    require("fs").accessSync(from2Up);
-    return from2Up;
+    require("fs").accessSync(fromElectron);
+    return fromElectron;
   } catch {
-    return from3Up;
+    return fromVitest;
   }
 }
 const WASM_DIR = resolveWasmDir();
@@ -379,40 +379,89 @@ async function analyzeRepository(repositoryRoot) {
     durationMs: Date.now() - startTime
   };
 }
-const GRAPH_SCHEMA_VERSION = "1.0";
+const GRAPH_SCHEMA_VERSION = "2.0";
 const ANALYSIS_DIR_NAME = ".codyn";
-async function saveGraphData(repositoryRoot, filesGraphData) {
+async function saveGlobalGraphData(repositoryRoot, globalGraph) {
   const analysisDir = path.join(repositoryRoot, ANALYSIS_DIR_NAME, "analysis", "graph");
-  const filesDir = path.join(analysisDir, "files");
   const indexPath = path.join(analysisDir, "index.json");
-  await fs.mkdir(filesDir, { recursive: true });
-  let totalNodeCount = 0;
-  let totalEdgeCount = 0;
-  for (const fileGraph of filesGraphData) {
-    const nodeIds = new Set(fileGraph.data.nodes.map((n) => n.id));
-    const validEdges = fileGraph.data.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
-    const finalGraphData = {
-      nodes: fileGraph.data.nodes,
-      edges: validEdges
-    };
-    totalNodeCount += finalGraphData.nodes.length;
-    totalEdgeCount += finalGraphData.edges.length;
-    const graphPath = path.join(filesDir, `${fileGraph.fileId}.json`);
-    await fs.writeFile(graphPath, JSON.stringify(finalGraphData, null, 2), "utf8");
-  }
+  const globalGraphPath = path.join(analysisDir, "global_graph.json");
+  await fs.mkdir(analysisDir, { recursive: true });
+  const nodeIds = new Set(globalGraph.nodes.map((n) => n.id));
+  const validEdges = globalGraph.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+  globalGraph.edges = validEdges;
+  await fs.writeFile(globalGraphPath, JSON.stringify(globalGraph, null, 2), "utf8");
   const graphIndex = {
     version: GRAPH_SCHEMA_VERSION,
     generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    nodeCount: totalNodeCount,
-    edgeCount: totalEdgeCount,
-    graphPath: path.relative(analysisDir, filesDir)
+    nodeCount: globalGraph.nodes.length,
+    edgeCount: globalGraph.edges.length,
+    graphPath: "global_graph.json"
   };
   await fs.writeFile(indexPath, JSON.stringify(graphIndex, null, 2), "utf8");
   return {
-    nodeCount: totalNodeCount,
-    edgeCount: totalEdgeCount,
+    nodeCount: globalGraph.nodes.length,
+    edgeCount: globalGraph.edges.length,
     outputPath: indexPath
   };
+}
+class ProjectSymbolTable {
+  constructor() {
+    this.symbolsByFile = /* @__PURE__ */ new Map();
+    this.importsByFile = /* @__PURE__ */ new Map();
+  }
+  addSymbol(file, symbol) {
+    if (!this.symbolsByFile.has(file)) {
+      this.symbolsByFile.set(file, /* @__PURE__ */ new Map());
+    }
+    this.symbolsByFile.get(file).set(symbol.name, symbol);
+  }
+  addImport(file, importInfo) {
+    if (!this.importsByFile.has(file)) {
+      this.importsByFile.set(file, /* @__PURE__ */ new Map());
+    }
+    this.importsByFile.get(file).set(importInfo.localName, importInfo);
+  }
+  // Resolves a relative import path to a repository-relative path
+  // Assumes repositoryRoot is conceptually the root of our "relative" paths
+  resolveModulePath(currentFile, modulePath) {
+    if (!modulePath.startsWith(".")) {
+      return modulePath;
+    }
+    const currentDir = path.dirname(currentFile);
+    let resolvedPath = path.join(currentDir, modulePath).replace(/\\/g, "/");
+    return resolvedPath;
+  }
+  resolveSymbol(currentFile, name) {
+    const localSymbols = this.symbolsByFile.get(currentFile);
+    if (localSymbols && localSymbols.has(name)) {
+      return localSymbols.get(name);
+    }
+    const imports = this.importsByFile.get(currentFile);
+    if (imports && imports.has(name)) {
+      const imp = imports.get(name);
+      const targetModule = this.resolveModulePath(currentFile, imp.sourceModule);
+      let targetFile = targetModule;
+      let foundTargetFile = Array.from(this.symbolsByFile.keys()).find(
+        (f) => f === targetFile || f === targetFile + ".ts" || f === targetFile + ".tsx" || f === targetFile + ".js" || f === targetFile + "/index.ts" || f === targetFile + "/index.js"
+      );
+      if (foundTargetFile) {
+        const targetSymbols = this.symbolsByFile.get(foundTargetFile);
+        if (targetSymbols) {
+          if (imp.importedName === "default") {
+            const def = Array.from(targetSymbols.values()).find((s) => s.name === "default" || s.isExported);
+            if (def) return def;
+          } else if (imp.importedName === "*") {
+            return { id: `module:${foundTargetFile}`, name: targetModule, type: "module", file: foundTargetFile, isExported: true };
+          } else {
+            if (targetSymbols.has(imp.importedName)) {
+              return targetSymbols.get(imp.importedName);
+            }
+          }
+        }
+      }
+    }
+    return void 0;
+  }
 }
 const MEANINGFUL_NODE_TYPES = /* @__PURE__ */ new Set([
   "function_declaration",
@@ -434,7 +483,10 @@ async function generateGraph(repositoryRoot) {
   } catch (e) {
     throw new Error(`Failed to read CST index at ${indexPath}. Has analysis been run?`);
   }
-  const filesGraphData = [];
+  const symbolTable = new ProjectSymbolTable();
+  const globalNodes = /* @__PURE__ */ new Map();
+  const globalEdges = /* @__PURE__ */ new Map();
+  const cstCache = /* @__PURE__ */ new Map();
   for (const file of indexData.files) {
     if (!file.cstPath) continue;
     const cstFilePath = path.join(analysisDir, file.cstPath);
@@ -442,48 +494,83 @@ async function generateGraph(repositoryRoot) {
     try {
       const cstRaw = await fs.readFile(cstFilePath, "utf8");
       cstData = JSON.parse(cstRaw);
+      cstCache.set(file.relativePath, cstData);
     } catch (e) {
       console.error(`Failed to read CST file: ${cstFilePath}`);
       continue;
     }
-    const nodes = [];
-    const edges = [];
     const fileNodeId = `file:${file.relativePath}`;
-    nodes.push({
+    globalNodes.set(fileNodeId, {
       id: fileNodeId,
       type: "file",
       label: path.basename(file.relativePath),
       file: file.relativePath
     });
-    traverseCST(cstData, file.relativePath, fileNodeId, nodes, edges);
-    filesGraphData.push({
-      fileId: file.id,
-      // Using the stable id from the CST index
-      relativePath: file.relativePath,
-      data: { nodes, edges }
-    });
+    extractSymbolsAndContains(cstData, file.relativePath, fileNodeId, globalNodes, globalEdges, symbolTable);
+    extractImports(cstData, file.relativePath, symbolTable);
   }
-  return await saveGraphData(repositoryRoot, filesGraphData);
+  for (const [relativePath, cstData] of cstCache.entries()) {
+    const fileNodeId = `file:${relativePath}`;
+    extractCalls(cstData, relativePath, fileNodeId, globalNodes, globalEdges, symbolTable);
+  }
+  const nodes = Array.from(globalNodes.values());
+  const edges = Array.from(globalEdges.values());
+  const functionsByFile = {};
+  const callsFrom = {};
+  const callsTo = {};
+  for (const node of nodes) {
+    if (node.file) {
+      if (!functionsByFile[node.file]) functionsByFile[node.file] = [];
+      functionsByFile[node.file].push(node.id);
+    }
+  }
+  for (const edge of edges) {
+    if (edge.type === "calls") {
+      if (!callsFrom[edge.source]) callsFrom[edge.source] = [];
+      callsFrom[edge.source].push(edge.target);
+      if (!callsTo[edge.target]) callsTo[edge.target] = [];
+      callsTo[edge.target].push(edge.source);
+    }
+  }
+  const globalGraph = {
+    nodes,
+    edges,
+    functionsByFile,
+    callsFrom,
+    callsTo
+  };
+  return await saveGlobalGraphData(repositoryRoot, globalGraph);
 }
-function traverseCST(node, relativePath, parentNodeId, nodes, edges) {
+function extractSymbolsAndContains(node, relativePath, parentNodeId, globalNodes, globalEdges, symbolTable, isExportedContext = false) {
   let currentMeaningfulNodeId = parentNodeId;
+  let currentlyExported = isExportedContext;
+  if (node.type === "export_statement") {
+    currentlyExported = true;
+  }
   if (MEANINGFUL_NODE_TYPES.has(node.type)) {
     let label = getIdentifierLabel(node) || node.type;
     const nodeTypeCleaned = node.type.replace("_declaration", "").replace("_definition", "");
     const nodeId = `${nodeTypeCleaned}:${relativePath}:${label}`;
-    if (!nodes.some((n) => n.id === nodeId)) {
-      nodes.push({
+    if (!globalNodes.has(nodeId)) {
+      globalNodes.set(nodeId, {
         id: nodeId,
         type: nodeTypeCleaned,
         label,
         file: relativePath
       });
+      symbolTable.addSymbol(relativePath, {
+        id: nodeId,
+        name: label,
+        type: nodeTypeCleaned,
+        file: relativePath,
+        isExported: currentlyExported
+      });
     }
     if (parentNodeId && parentNodeId !== nodeId) {
       const edgeType = "contains";
       const edgeId = `${parentNodeId}->${nodeId}:${edgeType}`;
-      if (!edges.some((e) => e.id === edgeId)) {
-        edges.push({
+      if (!globalEdges.has(edgeId)) {
+        globalEdges.set(edgeId, {
           id: edgeId,
           source: parentNodeId,
           target: nodeId,
@@ -492,10 +579,119 @@ function traverseCST(node, relativePath, parentNodeId, nodes, edges) {
       }
     }
     currentMeaningfulNodeId = nodeId;
+    currentlyExported = false;
   }
   if (node.children) {
     for (const child of node.children) {
-      traverseCST(child, relativePath, currentMeaningfulNodeId, nodes, edges);
+      extractSymbolsAndContains(child, relativePath, currentMeaningfulNodeId, globalNodes, globalEdges, symbolTable, currentlyExported);
+    }
+  }
+}
+function extractImports(node, relativePath, symbolTable) {
+  var _a, _b, _c, _d;
+  if (node.type === "import_statement") {
+    const sourceNode = (_a = node.children) == null ? void 0 : _a.find((c) => c.type === "string");
+    const fragment = (_b = sourceNode == null ? void 0 : sourceNode.children) == null ? void 0 : _b.find((c) => c.type === "string_fragment");
+    const sourceModule = fragment == null ? void 0 : fragment.text;
+    if (sourceModule) {
+      const importClause = (_c = node.children) == null ? void 0 : _c.find((c) => c.type === "import_clause");
+      if (importClause && importClause.children) {
+        const namedImports = importClause.children.find((c) => c.type === "named_imports");
+        if (namedImports && namedImports.children) {
+          for (const specifier of namedImports.children.filter((c) => c.type === "import_specifier")) {
+            const ids = (_d = specifier.children) == null ? void 0 : _d.filter((c) => c.type === "identifier");
+            if (ids && ids.length > 0) {
+              const importedName = ids[0].text;
+              const localName = ids.length > 1 ? ids[1].text : importedName;
+              symbolTable.addImport(relativePath, { localName, importedName, sourceModule });
+            }
+          }
+        }
+        const idNode = importClause.children.find((c) => c.type === "identifier");
+        if (idNode && idNode.text) {
+          symbolTable.addImport(relativePath, { localName: idNode.text, importedName: "default", sourceModule });
+        }
+        const namespaceImport = importClause.children.find((c) => c.type === "namespace_import");
+        if (namespaceImport && namespaceImport.children) {
+          const nsId = namespaceImport.children.find((c) => c.type === "identifier");
+          if (nsId && nsId.text) {
+            symbolTable.addImport(relativePath, { localName: nsId.text, importedName: "*", sourceModule });
+          }
+        }
+      }
+    }
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      extractImports(child, relativePath, symbolTable);
+    }
+  }
+}
+function extractCalls(node, relativePath, parentNodeId, globalNodes, globalEdges, symbolTable) {
+  let currentMeaningfulNodeId = parentNodeId;
+  if (MEANINGFUL_NODE_TYPES.has(node.type)) {
+    let label = getIdentifierLabel(node) || node.type;
+    const nodeTypeCleaned = node.type.replace("_declaration", "").replace("_definition", "");
+    const nodeId = `${nodeTypeCleaned}:${relativePath}:${label}`;
+    currentMeaningfulNodeId = nodeId;
+  } else if (node.type === "call_expression" && currentMeaningfulNodeId) {
+    const calledName = getCalledFunctionName(node);
+    if (calledName) {
+      let baseName = calledName;
+      let memberName = void 0;
+      if (calledName.includes(".")) {
+        const parts = calledName.split(".");
+        baseName = parts[0];
+        memberName = parts[1];
+      }
+      const resolvedSymbol = symbolTable.resolveSymbol(relativePath, baseName);
+      let targetNodeId;
+      let targetResolution = "unresolved";
+      if (resolvedSymbol) {
+        if (memberName && resolvedSymbol.type === "module") {
+          const targetSymbols = symbolTable.symbolsByFile.get(resolvedSymbol.file);
+          if (targetSymbols && targetSymbols.has(memberName)) {
+            targetNodeId = targetSymbols.get(memberName).id;
+            targetResolution = "resolved";
+          } else {
+            targetNodeId = `function:unresolved:${calledName}`;
+          }
+        } else {
+          targetNodeId = resolvedSymbol.id;
+          targetResolution = "resolved";
+        }
+      } else {
+        targetNodeId = `function:unresolved:${calledName}`;
+      }
+      if (!globalNodes.has(targetNodeId)) {
+        globalNodes.set(targetNodeId, {
+          id: targetNodeId,
+          type: "function",
+          label: calledName,
+          file: "unknown",
+          resolutionStatus: targetResolution
+        });
+      } else {
+        const existing = globalNodes.get(targetNodeId);
+        if (!existing.resolutionStatus) {
+          existing.resolutionStatus = targetResolution;
+        }
+      }
+      const edgeType = "calls";
+      const edgeId = `${currentMeaningfulNodeId}->${targetNodeId}:${edgeType}`;
+      if (!globalEdges.has(edgeId)) {
+        globalEdges.set(edgeId, {
+          id: edgeId,
+          source: currentMeaningfulNodeId,
+          target: targetNodeId,
+          type: edgeType
+        });
+      }
+    }
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      extractCalls(child, relativePath, currentMeaningfulNodeId, globalNodes, globalEdges, symbolTable);
     }
   }
 }
@@ -509,6 +705,95 @@ function getIdentifierLabel(node) {
     }
   }
   return void 0;
+}
+function getCalledFunctionName(node) {
+  var _a, _b, _c;
+  const target = (_a = node.children) == null ? void 0 : _a[0];
+  if (!target) return void 0;
+  if (target.type === "identifier" && target.text) return target.text;
+  if (target.type === "member_expression") {
+    const obj = (_b = target.children) == null ? void 0 : _b.find((c) => c.type === "identifier" || c.type === "this");
+    const prop = (_c = target.children) == null ? void 0 : _c.find((c) => c.type === "property_identifier");
+    if (obj && prop && obj.text && prop.text) return `${obj.text}.${prop.text}`;
+    if (prop && prop.text) return prop.text;
+  }
+  return void 0;
+}
+async function getFileGraphData(repositoryRoot, filePath, depth = 1) {
+  const relativePath = path.relative(repositoryRoot, filePath).replace(/\\/g, "/");
+  const analysisDir = path.join(repositoryRoot, ".codyn", "analysis");
+  const globalGraphPath = path.join(analysisDir, "graph", "global_graph.json");
+  try {
+    const graphRaw = await fs.readFile(globalGraphPath, "utf8");
+    const globalGraph = JSON.parse(graphRaw);
+    const nodesToReturn = /* @__PURE__ */ new Map();
+    const edgesToReturn = /* @__PURE__ */ new Map();
+    const fileNodeId = `file:${relativePath}`;
+    const fileNode = globalGraph.nodes.find((n) => n.id === fileNodeId);
+    if (fileNode) {
+      nodesToReturn.set(fileNodeId, fileNode);
+    }
+    const fileFunctions = globalGraph.functionsByFile[relativePath] || [];
+    for (const fnId of fileFunctions) {
+      const fnNode = globalGraph.nodes.find((n) => n.id === fnId);
+      if (fnNode) {
+        nodesToReturn.set(fnId, fnNode);
+      }
+    }
+    for (const edge of globalGraph.edges) {
+      if (edge.type === "contains" && nodesToReturn.has(edge.source) && nodesToReturn.has(edge.target)) {
+        edgesToReturn.set(edge.id, edge);
+      }
+    }
+    let currentLevelIds = [...fileFunctions];
+    const visitedNodes = new Set(fileFunctions);
+    const nodeMap = new Map(globalGraph.nodes.map((n) => [n.id, n]));
+    for (let currentDepth = 0; currentDepth < depth; currentDepth++) {
+      const nextLevelIds = [];
+      for (const sourceId of currentLevelIds) {
+        const targets = globalGraph.callsFrom[sourceId] || [];
+        for (const targetId of targets) {
+          const edgeId = `${sourceId}->${targetId}:calls`;
+          const globalEdge = globalGraph.edges.find((e) => e.id === edgeId);
+          if (globalEdge) {
+            edgesToReturn.set(edgeId, globalEdge);
+          }
+          if (!visitedNodes.has(targetId)) {
+            visitedNodes.add(targetId);
+            const targetNode = nodeMap.get(targetId);
+            if (targetNode) {
+              nodesToReturn.set(targetId, targetNode);
+              nextLevelIds.push(targetId);
+            }
+          }
+        }
+      }
+      currentLevelIds = nextLevelIds;
+      if (currentLevelIds.length === 0) break;
+    }
+    return {
+      nodes: Array.from(nodesToReturn.values()),
+      edges: Array.from(edgesToReturn.values())
+    };
+  } catch (e) {
+    return null;
+  }
+}
+async function getGlobalGraphData(repositoryRoot) {
+  const analysisDir = path.join(repositoryRoot, ".codyn", "analysis");
+  const globalGraphPath = path.join(analysisDir, "graph", "global_graph.json");
+  try {
+    const graphRaw = await fs.readFile(globalGraphPath, "utf8");
+    const globalGraph = JSON.parse(graphRaw);
+    const nodes = globalGraph.nodes.filter((n) => n.type === "function");
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const edges = globalGraph.edges.filter(
+      (e) => e.type === "calls" && nodeIds.has(e.source) && nodeIds.has(e.target)
+    );
+    return { nodes, edges };
+  } catch (e) {
+    return null;
+  }
 }
 function registerIpcHandlers(win2) {
   electron.ipcMain.handle("repository:selectFolder", async () => {
@@ -543,6 +828,24 @@ function registerIpcHandlers(win2) {
     try {
       const result = await generateGraph(dirPath);
       return result;
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+  });
+  electron.ipcMain.handle("graph:getFile", async (_, repoRoot, filePath) => {
+    try {
+      const data = await getFileGraphData(repoRoot, filePath);
+      return data;
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+  });
+  electron.ipcMain.handle("graph:getGlobal", async (_, repoRoot) => {
+    try {
+      const data = await getGlobalGraphData(repoRoot);
+      return data;
     } catch (err) {
       console.error(err);
       return null;

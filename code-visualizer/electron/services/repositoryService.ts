@@ -29,7 +29,7 @@ export async function getDirectoryTree(dirPath: string): Promise<FileNode | null
             
             for (const file of files) {
                 // Ignore common hidden folders to avoid massive trees for now
-                if (file === 'node_modules' || file === '.git' || file === 'dist' || file === '.DS_Store') {
+                if (file === 'node_modules' || file === '.git' || file === 'dist' || file === '.DS_Store' || file === '.codyn') {
                     continue;
                 }
                 const fullPath = path.join(dirPath, file);
