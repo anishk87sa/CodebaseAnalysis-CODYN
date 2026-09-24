@@ -5,6 +5,9 @@ export interface IElectronAPI {
     selectFolder: () => Promise<string | null>;
     getTree: (path: string) => Promise<FileNode | null>;
     analyzeCST: (path: string) => Promise<any>;
+  },
+  graph: {
+    generate: (path: string) => Promise<any>;
   }
 }
 

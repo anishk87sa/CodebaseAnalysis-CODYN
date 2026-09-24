@@ -1,12 +1,29 @@
-import React from 'react';
-import { RepositoryAnalysisResult } from '../../../electron/services/parser/types';
+import React, { useState } from 'react';
 
+// Use any for the result to avoid cross-reference compilation errors with electron source directory
 interface AnalysisSummaryProps {
-  result: RepositoryAnalysisResult | null;
+  result: any;
   isAnalyzing: boolean;
 }
 
+
 export default function AnalysisSummary({ result, isAnalyzing }: AnalysisSummaryProps) {
+  const [isGeneratingGraph, setIsGeneratingGraph] = useState(false);
+  const [graphResult, setGraphResult] = useState<any | null>(null);
+
+  const handleGenerateGraph = async () => {
+    if (!result) return;
+    setIsGeneratingGraph(true);
+    try {
+      const gResult = await window.codyn.graph.generate(result.repositoryRoot);
+      setGraphResult(gResult);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsGeneratingGraph(false);
+    }
+  };
+
   if (isAnalyzing) {
     return (
       <div className="analysis-summary analyzing">
@@ -52,6 +69,25 @@ export default function AnalysisSummary({ result, isAnalyzing }: AnalysisSummary
       <div className="analysis-meta">
         <p>Duration: {(result.durationMs / 1000).toFixed(2)}s</p>
         <p>Output: {result.cstDirectory}</p>
+      </div>
+
+      <div className="graph-generation-section" style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #eee' }}>
+        <button 
+          onClick={handleGenerateGraph} 
+          disabled={isGeneratingGraph}
+          className="btn btn-primary"
+        >
+          {isGeneratingGraph ? 'Generating Graph...' : 'Generate Graph JSON'}
+        </button>
+
+        {graphResult && (
+          <div className="graph-result" style={{ marginTop: '15px' }}>
+            <h4>Graph Generated Successfully</h4>
+            <p>Nodes: {graphResult.nodeCount}</p>
+            <p>Edges: {graphResult.edgeCount}</p>
+            <p style={{ fontSize: '0.85em', color: '#666' }}>Saved to: {graphResult.outputPath}</p>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 import { BrowserWindow, ipcMain, dialog } from 'electron'
 import { getDirectoryTree } from '../services/repositoryService'
 import { analyzeRepository } from '../services/storage/cstStorage'
+import { generateGraph } from '../services/graph/graphExtractor'
 
 export function registerIpcHandlers(win: BrowserWindow) {
   ipcMain.handle('repository:selectFolder', async () => {
@@ -28,6 +29,16 @@ export function registerIpcHandlers(win: BrowserWindow) {
   ipcMain.handle('repository:analyzeCST', async (_, dirPath: string) => {
     try {
       const result = await analyzeRepository(dirPath)
+      return result
+    } catch (err) {
+      console.error(err)
+      return null
+    }
+  })
+
+  ipcMain.handle('graph:generate', async (_, dirPath: string) => {
+    try {
+      const result = await generateGraph(dirPath)
       return result
     } catch (err) {
       console.error(err)

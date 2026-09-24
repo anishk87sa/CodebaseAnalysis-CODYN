@@ -299,13 +299,13 @@ async function parseFile(absolutePath, relativePath) {
   }
 }
 const CST_SCHEMA_VERSION = "1.0";
-const ANALYSIS_DIR_NAME = ".codyn";
+const ANALYSIS_DIR_NAME$1 = ".codyn";
 function getStableId(relativePath) {
   return crypto.createHash("sha256").update(relativePath).digest("hex");
 }
 async function analyzeRepository(repositoryRoot) {
   const startTime = Date.now();
-  const analysisDir = path.join(repositoryRoot, ANALYSIS_DIR_NAME, "analysis", "cst");
+  const analysisDir = path.join(repositoryRoot, ANALYSIS_DIR_NAME$1, "analysis", "cst");
   const filesDir = path.join(analysisDir, "files");
   const indexPath = path.join(analysisDir, "index.json");
   await fs.mkdir(filesDir, { recursive: true });
@@ -379,6 +379,137 @@ async function analyzeRepository(repositoryRoot) {
     durationMs: Date.now() - startTime
   };
 }
+const GRAPH_SCHEMA_VERSION = "1.0";
+const ANALYSIS_DIR_NAME = ".codyn";
+async function saveGraphData(repositoryRoot, filesGraphData) {
+  const analysisDir = path.join(repositoryRoot, ANALYSIS_DIR_NAME, "analysis", "graph");
+  const filesDir = path.join(analysisDir, "files");
+  const indexPath = path.join(analysisDir, "index.json");
+  await fs.mkdir(filesDir, { recursive: true });
+  let totalNodeCount = 0;
+  let totalEdgeCount = 0;
+  for (const fileGraph of filesGraphData) {
+    const nodeIds = new Set(fileGraph.data.nodes.map((n) => n.id));
+    const validEdges = fileGraph.data.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+    const finalGraphData = {
+      nodes: fileGraph.data.nodes,
+      edges: validEdges
+    };
+    totalNodeCount += finalGraphData.nodes.length;
+    totalEdgeCount += finalGraphData.edges.length;
+    const graphPath = path.join(filesDir, `${fileGraph.fileId}.json`);
+    await fs.writeFile(graphPath, JSON.stringify(finalGraphData, null, 2), "utf8");
+  }
+  const graphIndex = {
+    version: GRAPH_SCHEMA_VERSION,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    nodeCount: totalNodeCount,
+    edgeCount: totalEdgeCount,
+    graphPath: path.relative(analysisDir, filesDir)
+  };
+  await fs.writeFile(indexPath, JSON.stringify(graphIndex, null, 2), "utf8");
+  return {
+    nodeCount: totalNodeCount,
+    edgeCount: totalEdgeCount,
+    outputPath: indexPath
+  };
+}
+const MEANINGFUL_NODE_TYPES = /* @__PURE__ */ new Set([
+  "function_declaration",
+  "method_definition",
+  "class_declaration",
+  "interface_declaration",
+  "enum_declaration",
+  "struct_declaration",
+  "module_declaration",
+  "file"
+]);
+async function generateGraph(repositoryRoot) {
+  const analysisDir = path.join(repositoryRoot, ".codyn", "analysis", "cst");
+  const indexPath = path.join(analysisDir, "index.json");
+  let indexData;
+  try {
+    const indexRaw = await fs.readFile(indexPath, "utf8");
+    indexData = JSON.parse(indexRaw);
+  } catch (e) {
+    throw new Error(`Failed to read CST index at ${indexPath}. Has analysis been run?`);
+  }
+  const filesGraphData = [];
+  for (const file of indexData.files) {
+    if (!file.cstPath) continue;
+    const cstFilePath = path.join(analysisDir, file.cstPath);
+    let cstData;
+    try {
+      const cstRaw = await fs.readFile(cstFilePath, "utf8");
+      cstData = JSON.parse(cstRaw);
+    } catch (e) {
+      console.error(`Failed to read CST file: ${cstFilePath}`);
+      continue;
+    }
+    const nodes = [];
+    const edges = [];
+    const fileNodeId = `file:${file.relativePath}`;
+    nodes.push({
+      id: fileNodeId,
+      type: "file",
+      label: path.basename(file.relativePath),
+      file: file.relativePath
+    });
+    traverseCST(cstData, file.relativePath, fileNodeId, nodes, edges);
+    filesGraphData.push({
+      fileId: file.id,
+      // Using the stable id from the CST index
+      relativePath: file.relativePath,
+      data: { nodes, edges }
+    });
+  }
+  return await saveGraphData(repositoryRoot, filesGraphData);
+}
+function traverseCST(node, relativePath, parentNodeId, nodes, edges) {
+  let currentMeaningfulNodeId = parentNodeId;
+  if (MEANINGFUL_NODE_TYPES.has(node.type)) {
+    let label = getIdentifierLabel(node) || node.type;
+    const nodeTypeCleaned = node.type.replace("_declaration", "").replace("_definition", "");
+    const nodeId = `${nodeTypeCleaned}:${relativePath}:${label}`;
+    if (!nodes.some((n) => n.id === nodeId)) {
+      nodes.push({
+        id: nodeId,
+        type: nodeTypeCleaned,
+        label,
+        file: relativePath
+      });
+    }
+    if (parentNodeId && parentNodeId !== nodeId) {
+      const edgeType = "contains";
+      const edgeId = `${parentNodeId}->${nodeId}:${edgeType}`;
+      if (!edges.some((e) => e.id === edgeId)) {
+        edges.push({
+          id: edgeId,
+          source: parentNodeId,
+          target: nodeId,
+          type: edgeType
+        });
+      }
+    }
+    currentMeaningfulNodeId = nodeId;
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      traverseCST(child, relativePath, currentMeaningfulNodeId, nodes, edges);
+    }
+  }
+}
+function getIdentifierLabel(node) {
+  if (node.children) {
+    const idNode = node.children.find(
+      (c) => c.type === "identifier" || c.type === "property_identifier" || c.type === "type_identifier" || c.type === "name"
+    );
+    if (idNode && idNode.text) {
+      return idNode.text;
+    }
+  }
+  return void 0;
+}
 function registerIpcHandlers(win2) {
   electron.ipcMain.handle("repository:selectFolder", async () => {
     const { canceled, filePaths } = await electron.dialog.showOpenDialog(win2, {
@@ -402,6 +533,15 @@ function registerIpcHandlers(win2) {
   electron.ipcMain.handle("repository:analyzeCST", async (_, dirPath) => {
     try {
       const result = await analyzeRepository(dirPath);
+      return result;
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+  });
+  electron.ipcMain.handle("graph:generate", async (_, dirPath) => {
+    try {
+      const result = await generateGraph(dirPath);
       return result;
     } catch (err) {
       console.error(err);
